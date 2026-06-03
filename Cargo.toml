@@ -78,3 +78,7 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
+[build-dependencies]
+embed-resource = "2.5"
+
+
