@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! # Stratum Terminal
 //!
 //! The terminal that understands what you're doing.
@@ -110,10 +112,23 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Helper to check if an executable exists in PATH.
+fn has_command(cmd: &str) -> bool {
+    std::process::Command::new(if cfg!(windows) { "where" } else { "which" })
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Get the default system shell.
 fn default_system_shell() -> String {
     if cfg!(windows) {
-        String::from("powershell.exe")
+        if has_command("bash.exe") {
+            String::from("bash.exe")
+        } else {
+            String::from("powershell.exe")
+        }
     } else {
         String::from("/bin/bash")
     }
