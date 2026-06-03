@@ -1,0 +1,32 @@
+# Stratum Configuration
+#
+# Place this file at ~/.config/stratum/config.toml
+# All values shown below are the defaults.
+
+# Font settings
+font_family = "JetBrains Mono"
+font_size = 14.0
+
+# Scrollback lines (max lines kept in history)
+scrollback_lines = 10000
+
+# Enable GPU-accelerated rendering
+gpu_rendering = true
+
+# Theme name
+theme = "stratum-dark"
+
+# Tab width in spaces
+tab_width = 8
+
+# Cursor style: "block", "underline", or "bar"
+cursor_style = "block"
+
+# Cursor blink rate (0 = no blink)
+cursor_blink_ms = 500
+
+# Window opacity (0.0 transparent to 1.0 opaque)
+opacity = 1.0
+
+# Padding around terminal content in pixels
+padding = 8

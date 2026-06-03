@@ -1,0 +1,80 @@
+[package]
+name = "stratum"
+version = "0.1.0-alpha.1"
+edition = "2021"
+authors = ["Nexarats <contact@nexarats.com>"]
+description = "The terminal that understands what you're doing — GPU-rendered, AI-powered, mutation-aware"
+license = "MIT"
+repository = "https://github.com/nexarats/stratum"
+homepage = "https://nexarats.com/stratum"
+readme = "README.md"
+keywords = ["terminal", "shell", "gpu", "ai", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+rust-version = "1.80"
+
+[dependencies]
+# Terminal I/O and input handling (used for fallback CPU renderer)
+crossterm = "0.28"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Pseudo-terminal communication
+portable-pty = "0.8"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Serialization (for config, SEP protocol)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Directory paths
+dirs = "6.0"
+
+# HTTP client for AI API calls
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Unicode width handling
+unicode-width = "0.2"
+
+# GPU rendering
+wgpu = "24.0"
+
+# Window management
+winit = "0.30"
+
+# Font glyph rasterization (pure Rust, no system deps)
+fontdue = "0.9"
+
+# Safe byte casting for GPU buffers
+bytemuck = { version = "1.21", features = ["derive"] }
+
+# Block on async for GPU init
+pollster = "0.4"
+
+# Cross-platform clipboard (Windows, macOS, Linux/Wayland/X11)
+arboard = "3.4"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "parser_bench"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
