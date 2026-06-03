@@ -1,12 +1,12 @@
-# ╔══════════════════════════════════════════════════════════════════════╗
-# ║  Stratum Terminal — Windows Installer (PowerShell)                  ║
-# ║  Installs stratum and nos-shell binaries to your system PATH.       ║
-# ║                                                                     ║
-# ║  Usage (admin not required):                                        ║
-# ║    .\scripts\install.ps1                                            ║
-# ║    OR (remote):                                                     ║
-# ║    iwr -useb https://nexarats.com/install.ps1 | iex                 ║
-# ╚══════════════════════════════════════════════════════════════════════╝
+﻿# #======================================================================#
+# #  Stratum Terminal — Windows Installer (PowerShell)                  #
+# #  Installs stratum and nos-shell binaries to your system PATH.       #
+# #                                                                     #
+# #  Usage (admin not required):                                        #
+# #    .\scripts\install.ps1                                            #
+# #    OR (remote):                                                     #
+# #    iwr -useb https://nexarats.com/install.ps1 | iex                 #
+# #======================================================================#
 
 $ErrorActionPreference = "Stop"
 
@@ -17,10 +17,10 @@ $InstallDir  = if ($env:STRATUM_INSTALL_DIR) { $env:STRATUM_INSTALL_DIR } else {
 $BinDir      = "$InstallDir\bin"
 $ConfigDir   = "$InstallDir\config"
 
-function Write-Info  { param($msg) Write-Host "  ▸ " -ForegroundColor Cyan -NoNewline; Write-Host $msg }
-function Write-Ok    { param($msg) Write-Host "  ✓ " -ForegroundColor Green -NoNewline; Write-Host $msg }
-function Write-Warn  { param($msg) Write-Host "  ⚠ " -ForegroundColor Yellow -NoNewline; Write-Host $msg }
-function Write-Err   { param($msg) Write-Host "  ✗ " -ForegroundColor Red -NoNewline; Write-Host $msg; exit 1 }
+function Write-Info  { param($msg) Write-Host "  > " -ForegroundColor Cyan -NoNewline; Write-Host $msg }
+function Write-Ok    { param($msg) Write-Host "  OK " -ForegroundColor Green -NoNewline; Write-Host $msg }
+function Write-Warn  { param($msg) Write-Host "  WARN " -ForegroundColor Yellow -NoNewline; Write-Host $msg }
+function Write-Err   { param($msg) Write-Host "  ERR " -ForegroundColor Red -NoNewline; Write-Host $msg; exit 1 }
 
 # --- Locate project root ---
 function Get-ProjectRoot {
@@ -98,7 +98,7 @@ function Install-Binaries {
     # Create default config
     $configFile = Join-Path $ConfigDir "stratum.toml"
     if (-not (Test-Path $configFile)) {
-        @"
+        $configContent = '
 # Stratum Terminal Configuration
 # https://nexarats.com/stratum
 
@@ -126,7 +126,8 @@ opacity = 0.95
 # split_horizontal = "O"
 # copy = "C"
 # paste = "V"
-"@ | Set-Content $configFile -Encoding UTF8
+'
+        $configContent | Set-Content $configFile -Encoding UTF8
         Write-Ok "Created default config → $configFile"
     }
 }
@@ -169,14 +170,15 @@ function New-StartMenuShortcut {
 # --- Main ---
 function Main {
     Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════╗" -ForegroundColor White
-    Write-Host "  ║  " -ForegroundColor White -NoNewline
+    Write-Host "  #==========================================#" -ForegroundColor White
+    Write-Host "  #  " -ForegroundColor White -NoNewline
     Write-Host "Stratum Terminal" -ForegroundColor Cyan -NoNewline
-    Write-Host " Installer  v$Version  ║" -ForegroundColor White
-    Write-Host "  ╚══════════════════════════════════════════╝" -ForegroundColor White
+    Write-Host " Installer  v$Version  #" -ForegroundColor White
+    Write-Host "  #==========================================#" -ForegroundColor White
     Write-Host ""
 
-    Write-Info "Platform: Windows $([System.Environment]::Is64BitOperatingSystem ? 'x64' : 'x86')"
+    $arch = if ([System.Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
+    Write-Info "Platform: Windows $arch"
     Write-Info "Install directory: $InstallDir"
     Write-Host ""
 
@@ -197,9 +199,9 @@ function Main {
 
     # Summary
     Write-Host ""
-    Write-Host "  ═══════════════════════════════════════════" -ForegroundColor Green
-    Write-Host "    Stratum installed successfully! 🚀" -ForegroundColor Green
-    Write-Host "  ═══════════════════════════════════════════" -ForegroundColor Green
+    Write-Host "  ===========================================" -ForegroundColor Green
+    Write-Host "    Stratum installed successfully! SUCCESS" -ForegroundColor Green
+    Write-Host "  ===========================================" -ForegroundColor Green
     Write-Host ""
     Write-Host "    Binary:  " -NoNewline; Write-Host "$BinDir\stratum.exe" -ForegroundColor Cyan
     Write-Host "    Config:  " -NoNewline; Write-Host "$ConfigDir\stratum.toml" -ForegroundColor Cyan
