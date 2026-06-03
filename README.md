@@ -135,46 +135,6 @@ foreground = "#c0caf5"
 
 ---
 
-## 🏗️ Architecture
-
-```
-stratum/src/
-├── main.rs              CLI entry point & argument processing
-├── app.rs               Winit event loop, GPU & input loop integration, SAP poller
-├── errors.rs            Error hierarchy
-├── terminal/
-│   ├── pane.rs          PTY communications, ANSI code parsing, character grid state
-│   └── pty.rs           Subprocess management, PTY creation, environment injector
-├── parser/
-│   └── ansi.rs          ANSI escape sequence FSM & structured OSC packet extractor
-├── screen/
-│   └── grid.rs          Character grid buffers & scrollback manager
-├── renderer/
-│   ├── gpu.rs           wgpu pipeline, render passes, grid/cursor shaders
-│   ├── glyph_atlas.rs   Glyph rasterizer, texture allocation, glyph caching
-│   ├── terminal.wgsl    GPU shaders (text, background, cursor overlay)
-│   └── overlay.rs       Status bar UI, toasts, confirmation popups, structured tables
-├── layout/
-│   ├── panes.rs         Binary-tree pane splits and focus controller
-│   └── tabs.rs          Tab list manager
-├── features/
-│   ├── consequence.rs   Execution risk evaluator
-│   ├── dimensional_panes.rs  Escape-sequence structured table interpreter
-│   ├── mutation_preview.rs   Filesystem mutation analyzer
-│   └── inline_docs.rs   Contextual flag documentation lookup
-├── input/
-│   ├── keyboard.rs      Global shortcut parser
-│   └── tracker.rs       Mouse clicks, scroll events, dragging, text selections
-├── agent/
-│   ├── mod.rs           Module root
-│   ├── protocol.rs      Stratum Agent Protocol (SAP) JSON definitions
-│   └── server.rs        Dedicated thread stdio reader/writer
-└── config/
-    └── mod.rs           TOML configuration loading
-```
-
----
-
 ## 🛠️ Requirements & Building
 
 ### Prerequisites
