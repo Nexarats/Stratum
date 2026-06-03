@@ -5,7 +5,7 @@
 **The terminal that understands what you're doing — GPU-rendered, AI-aware, and agent-ready.**
 
 [![CI](https://github.com/nexarats/NOS/actions/workflows/ci.yml/badge.svg)](https://github.com/nexarats/NOS/actions)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 *Part of the [NOS (Nexarats Operating System)](https://github.com/nexarats/NOS) project.*
 
@@ -203,13 +203,10 @@ cargo build --release
 
 ## 📄 License & Attribution
 
-Stratum is open-source software licensed under the **[MIT License](LICENSE)**. 
+Stratum is open-source software licensed under the **[Apache License 2.0](LICENSE)**. 
 
 ### Attribution Requirements
-You are free to download, use, modify, build upon, and distribute this software for personal, commercial, or public projects. However, you **must include** the copyright notice and permission notice from the original license in all copies or substantial portions of the software:
-
-> Copyright (c) 2026 Nexarats
-> 
-> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+You are free to download, use, modify, build upon, and distribute this software for personal, commercial, or public projects. However, under the Apache License 2.0 terms, you must retain all copyright, patent, trademark, and attribution notices from the Source form of the Work, and include a copy of the license.
 
 Please give credit to **Nexarats** if you use Stratum's codebase or design patterns in your own projects!
+
