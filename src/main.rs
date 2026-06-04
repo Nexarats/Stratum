@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![allow(dead_code, unused_imports, unused_mut, unused_variables)]
 
 //! # Stratum Terminal
 //!
@@ -124,10 +125,13 @@ fn has_command(cmd: &str) -> bool {
 /// Get the default system shell.
 fn default_system_shell() -> String {
     if cfg!(windows) {
-        if has_command("bash.exe") {
-            String::from("bash.exe")
-        } else {
+        // Prefer PowerShell 7+ (pwsh) > PowerShell 5.1 > cmd.exe
+        if has_command("pwsh.exe") {
+            String::from("pwsh.exe")
+        } else if has_command("powershell.exe") {
             String::from("powershell.exe")
+        } else {
+            String::from("cmd.exe")
         }
     } else {
         String::from("/bin/bash")

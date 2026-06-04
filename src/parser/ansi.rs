@@ -34,6 +34,8 @@ pub struct AnsiParser {
     osc_buffer: Vec<u8>,
     /// NOS Shell IPC messages (structured JSON data received via OSC).
     nos_ipc_messages: Vec<String>,
+    /// Stratum slash commands intercepted by the shell hook.
+    pub stratum_commands: Vec<String>,
 }
 
 impl AnsiParser {
@@ -47,6 +49,7 @@ impl AnsiParser {
             intermediates: Vec::with_capacity(4),
             osc_buffer: Vec::with_capacity(256),
             nos_ipc_messages: Vec::new(),
+            stratum_commands: Vec::new(),
         }
     }
 
@@ -63,6 +66,11 @@ impl AnsiParser {
     /// Drain any NOS Shell IPC messages received since last call.
     pub fn take_nos_ipc(&mut self) -> Vec<String> {
         std::mem::take(&mut self.nos_ipc_messages)
+    }
+
+    /// Drain any Stratum slash commands received since last call.
+    pub fn take_stratum_commands(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.stratum_commands)
     }
 
     /// Ground state — normal characters and C0 controls.
@@ -527,6 +535,7 @@ impl AnsiParser {
         // OSC commands are used for setting window title, etc.
         // Parse: first number before ';' is the command type
         let s = String::from_utf8_lossy(&self.osc_buffer);
+        tracing::info!("OSC dispatch: buffer={:?} len={}", s, self.osc_buffer.len());
         if let Some((cmd, _value)) = s.split_once(';') {
             match cmd {
                 "0" | "2" => {
@@ -538,10 +547,17 @@ impl AnsiParser {
                     tracing::debug!("NOS IPC received: {} bytes", _value.len());
                     self.nos_ipc_messages.push(_value.to_string());
                 }
+                "STRATUM" => {
+                    // Stratum shell hook: intercepted slash command
+                    tracing::info!("STRATUM command received via OSC: {}", _value);
+                    self.stratum_commands.push(_value.to_string());
+                }
                 _ => {
-                    tracing::trace!("Unhandled OSC: {}", cmd);
+                    tracing::info!("Unhandled OSC cmd={}: value={}", cmd, _value);
                 }
             }
+        } else {
+            tracing::info!("OSC with no semicolon: {:?}", s);
         }
     }
 }

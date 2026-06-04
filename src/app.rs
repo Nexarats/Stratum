@@ -82,6 +82,9 @@ struct AppState {
     shell: String,
     /// Pending command awaiting confirmation (consequence warning active).
     pending_command: Option<String>,
+    /// Buffer for keystrokes when input starts with '/' (potential AI command).
+    /// Prevents partial commands from leaking to the PTY shell.
+    slash_command_buffer: Vec<Vec<u8>>,
 
     // --- Selection & mouse ---
     selection: Selection,
@@ -172,8 +175,12 @@ impl ApplicationHandler for TerminalApp {
 
         let mut panes = HashMap::new();
         let pane_id = PaneId(0);
+        let shell_name = self.shell.clone();
         match TerminalPane::new(&self.shell, cols as u16, rows as u16) {
-            Ok(pane) => {
+            Ok(mut pane) => {
+                // Inject shell integration hook after a brief delay
+                // to let the shell initialize
+                pane.inject_shell_hook(&shell_name);
                 panes.insert(pane_id, pane);
             }
             Err(e) => {
@@ -192,9 +199,6 @@ impl ApplicationHandler for TerminalApp {
         });
 
         let mut overlay_manager = OverlayManager::new();
-        overlay_manager.set_status_bar(StatusBarContent::from_state(
-            1, 0, 1, 0, &self.shell, cols, rows,
-        ));
         overlay_manager.toast(ToastContent::info(format!(
             "Stratum v{} — GPU: {}",
             env!("CARGO_PKG_VERSION"),
@@ -237,6 +241,7 @@ impl ApplicationHandler for TerminalApp {
             font_size,
             shell: self.shell.clone(),
             pending_command: None,
+            slash_command_buffer: Vec::new(),
             selection: Selection::new(),
             mouse_pos: (0.0, 0.0),
             last_click_time: Instant::now() - Duration::from_secs(10),
@@ -340,6 +345,29 @@ impl ApplicationHandler for TerminalApp {
             if pane.process_pty_output() {
                 state.needs_redraw = true;
             }
+        }
+
+        // Process Stratum slash commands from shell hooks
+        // These arrive via OSC sequences: ESC]STRATUM;cmd_name BEL
+        let mut stratum_cmds = Vec::new();
+        for pane in state.panes.values_mut() {
+            let cmds = pane.parser.take_stratum_commands();
+            stratum_cmds.extend(cmds);
+        }
+        for cmd in stratum_cmds {
+            tracing::info!("Processing Stratum slash command: /{}", cmd);
+            let full_cmd = format!("/{}", cmd);
+            let is_ai = state.on_command_submitted(full_cmd.clone());
+            if is_ai {
+                state.overlay_manager.toast(ToastContent::info(
+                    format!("▸ /{}", cmd),
+                ));
+            } else {
+                state.overlay_manager.toast(ToastContent::warning(
+                    format!("Unknown command: /{}", cmd),
+                ));
+            }
+            state.needs_redraw = true;
         }
 
         // Poll for AI responses (non-blocking)
@@ -506,17 +534,7 @@ impl AppState {
             }
         }
 
-        // Update status bar
         let (cols, rows) = self.renderer.grid_dimensions();
-        self.overlay_manager.set_status_bar(StatusBarContent::from_state(
-            self.panes.len(),
-            0,
-            self.tab_manager.tab_count(),
-            self.tab_manager.active_index(),
-            &self.shell,
-            cols,
-            rows,
-        ));
 
         self.needs_redraw = true;
     }
@@ -692,30 +710,22 @@ impl AppState {
             return;
         }
 
-        // --- Feed input tracker BEFORE sending to PTY ---
-        let submitted_command = self.input_tracker.feed(&bytes);
+        // --- Feed input tracker (for inline docs + suggestions) ---
+        let _submitted_command = self.input_tracker.feed(&bytes);
 
-        // --- Update inline docs + suggestions if input changed ---
         if self.input_tracker.take_dirty() {
             self.update_inline_docs();
             self.update_suggestions();
         }
 
-        // --- Handle command submission (Enter pressed) ---
-        let mut is_ai_command = false;
-        if let Some(ref command) = submitted_command {
-            self.suggestion_engine.card.hide();
-            is_ai_command = self.on_command_submitted(command.clone());
-        }
-
-        // --- Send to active pane PTY (skip if AI command) ---
-        if !is_ai_command {
-            let active_pane_id = self.pane_tree.active_pane();
-            if let Some(pane) = self.panes.get_mut(&active_pane_id) {
-                if !pane.exited {
-                    if let Err(e) = pane.write(&bytes) {
-                        tracing::warn!("PTY write error: {}", e);
-                    }
+        // --- Send directly to PTY ---
+        // Slash commands are handled at the SHELL level via CommandNotFoundAction hook.
+        // The shell catches /commands and sends OSC sequences back to us.
+        let active_pane_id = self.pane_tree.active_pane();
+        if let Some(pane) = self.panes.get_mut(&active_pane_id) {
+            if !pane.exited {
+                if let Err(e) = pane.write(&bytes) {
+                    tracing::warn!("PTY write error: {}", e);
                 }
             }
         }
@@ -1212,17 +1222,7 @@ impl AppState {
     }
 
     fn update_and_render(&mut self) {
-        // Update status bar
         let (cols, rows) = self.renderer.grid_dimensions();
-        self.overlay_manager.set_status_bar(StatusBarContent::from_state(
-            self.panes.len(),
-            0,
-            self.tab_manager.tab_count(),
-            self.tab_manager.active_index(),
-            &self.shell,
-            cols,
-            rows,
-        ));
 
         // Build pane render list
         let active_pane_id = self.pane_tree.active_pane();

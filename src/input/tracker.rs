@@ -14,6 +14,21 @@ pub struct InputTracker {
     dirty: bool,
     /// Cursor position within the buffer.
     cursor_pos: usize,
+    /// State machine for skipping multi-byte escape sequences.
+    escape_state: EscapeState,
+}
+
+/// State machine for tracking multi-byte escape sequences.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum EscapeState {
+    /// Normal input — not inside an escape sequence.
+    Normal,
+    /// Just saw ESC (0x1b) — waiting for next byte to determine sequence type.
+    Escaped,
+    /// Inside a CSI sequence (ESC [) — skip until we see a final byte (0x40..=0x7e).
+    Csi,
+    /// Inside an SS3 sequence (ESC O) — skip exactly one more byte.
+    Ss3,
 }
 
 impl InputTracker {
@@ -23,6 +38,7 @@ impl InputTracker {
             history: Vec::new(),
             dirty: false,
             cursor_pos: 0,
+            escape_state: EscapeState::Normal,
         }
     }
 
@@ -30,6 +46,47 @@ impl InputTracker {
     /// Returns Some(command) if Enter was pressed (command submitted).
     pub fn feed(&mut self, data: &[u8]) -> Option<String> {
         for &byte in data {
+            // --- Escape sequence state machine ---
+            match self.escape_state {
+                EscapeState::Escaped => {
+                    match byte {
+                        b'[' => {
+                            self.escape_state = EscapeState::Csi;
+                            continue;
+                        }
+                        b'O' => {
+                            self.escape_state = EscapeState::Ss3;
+                            continue;
+                        }
+                        _ => {
+                            // Unknown escape — just skip this byte too and reset
+                            self.escape_state = EscapeState::Normal;
+                            continue;
+                        }
+                    }
+                }
+                EscapeState::Csi => {
+                    // CSI sequences: ESC [ <params> <final byte>
+                    // Parameters are 0x30..=0x3f, intermediates are 0x20..=0x2f
+                    // Final byte is 0x40..=0x7e
+                    if (0x40..=0x7e).contains(&byte) {
+                        // Final byte — sequence complete
+                        self.escape_state = EscapeState::Normal;
+                    }
+                    // Either way, skip this byte (it's part of the escape sequence)
+                    continue;
+                }
+                EscapeState::Ss3 => {
+                    // SS3 sequences: ESC O <single byte>
+                    self.escape_state = EscapeState::Normal;
+                    continue;
+                }
+                EscapeState::Normal => {
+                    // Fall through to normal processing below
+                }
+            }
+
+            // --- Normal byte processing ---
             match byte {
                 // Enter (carriage return) — command submitted
                 b'\r' | b'\n' => {
@@ -47,6 +104,14 @@ impl InputTracker {
                 }
                 // Backspace (DEL)
                 0x7f => {
+                    if self.cursor_pos > 0 {
+                        self.cursor_pos -= 1;
+                        self.buffer.remove(self.cursor_pos);
+                        self.dirty = true;
+                    }
+                }
+                // Backspace (BS) — some terminals send 0x08 instead of 0x7f
+                0x08 => {
                     if self.cursor_pos > 0 {
                         self.cursor_pos -= 1;
                         self.buffer.remove(self.cursor_pos);
@@ -83,8 +148,10 @@ impl InputTracker {
                 }
                 // Tab — don't add to buffer (shell handles completion)
                 b'\t' => {}
-                // Escape sequences (skip) — will be a multi-byte sequence
-                0x1b => {}
+                // Escape — start of an escape sequence
+                0x1b => {
+                    self.escape_state = EscapeState::Escaped;
+                }
                 // Printable ASCII
                 0x20..=0x7e => {
                     self.buffer.insert(self.cursor_pos, byte as char);

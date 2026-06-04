@@ -95,7 +95,35 @@ impl Theme {
 // Built-in Themes
 // =============================================================================
 
-/// Stratum Dark — the default theme. Deep navy with vibrant accents.
+/// Stratum — the default theme. Clean black background, white text, warm accents.
+pub const STRATUM: Theme = Theme {
+    name: "stratum",
+    fg: [1.00, 1.00, 1.00, 1.0],       // #FFFFFF — pure white
+    bg: [0.00, 0.00, 0.00, 1.0],       // #000000 — pure black
+    cursor: [0.90, 0.90, 0.90, 1.0],   // #E6E6E6 — bright gray cursor
+    selection_bg: [0.30, 0.30, 0.35, 0.50], // Subtle gray highlight
+    selection_fg: None,
+    ansi: [
+        [0.07, 0.07, 0.07, 1.0],       //  0 Black    #121212
+        [0.90, 0.27, 0.27, 1.0],       //  1 Red      #E64545
+        [0.30, 0.82, 0.40, 1.0],       //  2 Green    #4DD166
+        [0.90, 0.75, 0.30, 1.0],       //  3 Yellow   #E6BF4D (warm amber/orange)
+        [0.35, 0.57, 0.93, 1.0],       //  4 Blue     #5992ED
+        [0.72, 0.40, 0.90, 1.0],       //  5 Magenta  #B866E6
+        [0.30, 0.78, 0.80, 1.0],       //  6 Cyan     #4DC7CC
+        [0.85, 0.85, 0.85, 1.0],       //  7 White    #D9D9D9
+        [0.40, 0.40, 0.40, 1.0],       //  8 Bright Black   #666666
+        [1.00, 0.40, 0.40, 1.0],       //  9 Bright Red     #FF6666
+        [0.40, 0.95, 0.53, 1.0],       // 10 Bright Green   #66F287
+        [1.00, 0.85, 0.40, 1.0],       // 11 Bright Yellow  #FFD966 (warm orange)
+        [0.50, 0.70, 1.00, 1.0],       // 12 Bright Blue    #80B3FF
+        [0.83, 0.55, 1.00, 1.0],       // 13 Bright Magenta #D48CFF
+        [0.40, 0.90, 0.93, 1.0],       // 14 Bright Cyan    #66E6ED
+        [1.00, 1.00, 1.00, 1.0],       // 15 Bright White   #FFFFFF
+    ],
+};
+
+/// Stratum Dark — deep navy with vibrant accents.
 pub const STRATUM_DARK: Theme = Theme {
     name: "stratum-dark",
     fg: [0.85, 0.87, 0.91, 1.0],       // #D9DEE8
@@ -265,6 +293,7 @@ pub const SOLARIZED_DARK: Theme = Theme {
 
 /// All built-in themes.
 pub const ALL_THEMES: &[&Theme] = &[
+    &STRATUM,
     &STRATUM_DARK,
     &STRATUM_LIGHT,
     &MONOKAI,
@@ -283,10 +312,11 @@ pub fn get_theme(name: &str) -> &'static Theme {
     }
     // Also support aliases
     match lower.as_str() {
+        "default" | "classic" => &STRATUM,
         "dark" => &STRATUM_DARK,
         "light" => &STRATUM_LIGHT,
         "solarized" => &SOLARIZED_DARK,
-        _ => &STRATUM_DARK,
+        _ => &STRATUM,
     }
 }
 
@@ -301,6 +331,7 @@ mod tests {
 
     #[test]
     fn test_get_theme_by_name() {
+        assert_eq!(get_theme("stratum").name, "stratum");
         assert_eq!(get_theme("stratum-dark").name, "stratum-dark");
         assert_eq!(get_theme("monokai").name, "monokai");
         assert_eq!(get_theme("dracula").name, "dracula");
@@ -311,6 +342,8 @@ mod tests {
 
     #[test]
     fn test_aliases() {
+        assert_eq!(get_theme("default").name, "stratum");
+        assert_eq!(get_theme("classic").name, "stratum");
         assert_eq!(get_theme("dark").name, "stratum-dark");
         assert_eq!(get_theme("light").name, "stratum-light");
         assert_eq!(get_theme("solarized").name, "solarized-dark");
@@ -318,8 +351,8 @@ mod tests {
 
     #[test]
     fn test_fallback() {
-        assert_eq!(get_theme("nonexistent").name, "stratum-dark");
-        assert_eq!(get_theme("").name, "stratum-dark");
+        assert_eq!(get_theme("nonexistent").name, "stratum");
+        assert_eq!(get_theme("").name, "stratum");
     }
 
     #[test]
@@ -355,7 +388,8 @@ mod tests {
     #[test]
     fn test_theme_names() {
         let names = theme_names();
-        assert_eq!(names.len(), 6);
+        assert_eq!(names.len(), 7);
+        assert!(names.contains(&"stratum"));
         assert!(names.contains(&"stratum-dark"));
         assert!(names.contains(&"dracula"));
     }

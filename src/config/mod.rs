@@ -44,7 +44,7 @@ impl Default for Settings {
             font_size: 14.0,
             scrollback_lines: 10_000,
             gpu_rendering: true,
-            theme: String::from("stratum-dark"),
+            theme: String::from("stratum"),
             tab_width: 8,
             cursor_style: String::from("block"),
             cursor_blink_ms: 500,

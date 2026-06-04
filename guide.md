@@ -53,7 +53,7 @@ Inside the Stratum Terminal window, you can manage your keys interactively using
     ```
 *   **Set an API Key:** Save a provider key to the local credential store:
     ```
-    /ai-set-key gemini AIzaSyYourApiKeyHere
+    /ai-set-key gemini AIzaSyCu0DBbg0GasxSWZB0dMk9dcQW6fBicy8g
     /ai-set-key anthropic sk-ant-yourApiKeyHere
     ```
     *(API keys are saved securely in `~/.stratum/config/credentials`)*

@@ -11,6 +11,47 @@ use crate::parser::AnsiParser;
 use crate::screen::ScreenGrid;
 use crate::terminal::PtySession;
 
+/// Strip ANSI escape sequences from a string.
+/// Handles CSI (ESC[...), OSC (ESC]...), and simple ESC sequences.
+fn strip_ansi_escapes(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip ESC and the sequence that follows
+            match chars.peek() {
+                Some('[') => {
+                    // CSI sequence: ESC[...final_byte
+                    chars.next(); // skip '['
+                    while let Some(&nc) = chars.peek() {
+                        chars.next();
+                        if nc.is_ascii_alphabetic() || nc == '@' || nc == '~' {
+                            break; // final byte
+                        }
+                    }
+                }
+                Some(']') => {
+                    // OSC sequence: ESC]...BEL or ESC]...ESC\\
+                    chars.next(); // skip ']'
+                    while let Some(&nc) = chars.peek() {
+                        chars.next();
+                        if nc == '\x07' || nc == '\x1b' {
+                            break;
+                        }
+                    }
+                }
+                _ => {
+                    // Simple escape: skip one more char
+                    chars.next();
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 /// Data produced by a pane's PTY reader thread.
 pub enum PtyEvent {
     /// Raw bytes from the shell process.
@@ -89,6 +130,62 @@ impl TerminalPane {
         })
     }
 
+    /// Inject the Stratum shell integration hook.
+    /// This writes a PowerShell script into the PTY that intercepts
+    /// slash commands (e.g. /ai-test) at the SHELL level and sends
+    /// them back to Stratum via OSC escape sequences.
+    pub fn inject_shell_hook(&mut self, shell: &str) {
+        if shell.contains("powershell") || shell.contains("pwsh") {
+            // PowerShell: Use $ExecutionContext.InvokeCommand.CommandNotFoundAction
+            // This fires when PowerShell can't find a command, so /ai-test triggers it.
+            //
+            // IMPORTANT: We use a plain text marker "__STRATUM_CMD__:" instead of
+            // OSC escape sequences because Windows ConPTY intercepts ESC sequences
+            // internally instead of forwarding them to the terminal emulator.
+            //
+            // The marker is detected and stripped from PTY output before rendering.
+            let hook = format!(
+                "{}\r",
+                concat!(
+                    "$ExecutionContext.InvokeCommand.CommandNotFoundAction = {",
+                        "param($Name,$Event) ",
+                        "if($Name -like '/*'){",
+                            "$cmd=$Name.Substring(1); ",
+                            "$Event.StopSearch=$true; ",
+                            "$Event.CommandScriptBlock=[scriptblock]::Create(",
+                                "'$a=if($args){\" \"+($args-join\" \")}else{\"\"}; ",
+                                "Write-Host \"__STRATUM_CMD__:'+$cmd+'$a\" '",
+                            ")",
+                        "}",
+                    "}",
+                )
+            );
+            tracing::info!("Injecting PowerShell shell hook");
+            let _ = self.write(hook.as_bytes());
+            // Clear the screen so the hook command isn't visible
+            let _ = self.write(b"cls\r");
+        } else if shell.contains("bash") || shell.contains("zsh") || shell.contains("sh") {
+            // Bash/Zsh: Use command_not_found_handle
+            let hook = concat!(
+                "command_not_found_handle() { ",
+                    "if [[ \"$1\" == /* ]]; then ",
+                        "local cmd=\"${1:1}\"; ",
+                        "printf '\\e]STRATUM;%s\\a' \"$cmd\"; ",
+                        "return 0; ",
+                    "fi; ",
+                    "echo \"$1: command not found\"; ",
+                    "return 127; ",
+                "}",
+                "\n"
+            );
+            tracing::info!("Injecting Bash/Zsh shell hook");
+            let _ = self.write(hook.as_bytes());
+        } else if shell.contains("cmd") {
+            // CMD: No easy hook available, skip
+            tracing::info!("CMD shell detected — slash commands not supported via shell hook");
+        }
+    }
+
     /// Process all pending PTY output.
     /// Returns true if there was any output to process.
     pub fn process_pty_output(&mut self) -> bool {
@@ -97,8 +194,59 @@ impl TerminalPane {
         while let Ok(event) = self.pty_rx.try_recv() {
             match event {
                 PtyEvent::Output(data) => {
-                    for byte in &data {
-                        self.parser.advance(*byte, &mut self.screen);
+                    // Scan for Stratum command marker in raw output.
+                    // The PowerShell hook outputs: __STRATUM_CMD__:command args
+                    // We detect this, extract the command, and strip the marker
+                    // from the data before passing to the ANSI parser.
+                    let text = String::from_utf8_lossy(&data);
+
+                    if let Some(marker_pos) = text.find("__STRATUM_CMD__:") {
+                        let cmd_start = marker_pos + "__STRATUM_CMD__:".len();
+                        // Find end of command (newline or end of data)
+                        let rest = &text[cmd_start..];
+                        let cmd_end = rest.find(|c: char| c == '\n' || c == '\r')
+                            .unwrap_or(rest.len());
+                        let raw_cmd = rest[..cmd_end].trim().to_string();
+
+                        // Strip ANSI escape codes (PSReadLine appends ESC[K etc.)
+                        let cmd = strip_ansi_escapes(&raw_cmd);
+
+                        // Validate: command must start with alphanumeric or hyphen
+                        // (filters out false positives from the hook echo at startup)
+                        let is_valid = cmd.chars().next()
+                            .map(|c| c.is_alphanumeric() || c == '-')
+                            .unwrap_or(false);
+
+                        if !cmd.is_empty() && is_valid {
+                            tracing::info!("STRATUM command intercepted: /{}", cmd);
+                            self.parser.stratum_commands.push(cmd);
+                        }
+
+                        // Strip the marker line from data before passing to parser.
+                        // Find the full line containing the marker (from line start to line end).
+                        let line_start = text[..marker_pos].rfind('\n')
+                            .map(|i| i + 1)
+                            .unwrap_or(marker_pos);
+                        let line_end_offset = cmd_start + cmd_end;
+                        // Skip past trailing \r\n
+                        let mut skip_end = line_end_offset;
+                        let text_bytes = text.as_bytes();
+                        while skip_end < text_bytes.len() && (text_bytes[skip_end] == b'\r' || text_bytes[skip_end] == b'\n') {
+                            skip_end += 1;
+                        }
+
+                        // Parse everything except the marker line
+                        for byte in &data[..line_start] {
+                            self.parser.advance(*byte, &mut self.screen);
+                        }
+                        for byte in &data[skip_end..] {
+                            self.parser.advance(*byte, &mut self.screen);
+                        }
+                    } else {
+                        // No marker — pass all bytes to parser normally
+                        for byte in &data {
+                            self.parser.advance(*byte, &mut self.screen);
+                        }
                     }
                     had_output = true;
                 }
@@ -140,6 +288,14 @@ impl TerminalPane {
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<()> {
         self.screen.resize(cols as usize, rows as usize);
         self.pty.resize(cols, rows)
+    }
+
+    /// Inject bytes into the screen display only (NOT sent to the shell).
+    /// This renders text visually on the terminal grid without executing anything.
+    pub fn inject_display(&mut self, data: &[u8]) {
+        for byte in data {
+            self.parser.advance(*byte, &mut self.screen);
+        }
     }
 }
 

@@ -312,9 +312,9 @@ impl StatusBarContent {
         grid_rows: usize,
     ) -> Self {
         let left = if pane_count > 1 {
-            format!(" Pane {}/{} │ {} ", active_pane + 1, pane_count, shell)
+            format!(" Pane {}/{} ", active_pane + 1, pane_count)
         } else {
-            format!(" {} ", shell)
+            String::from(" Stratum ")
         };
 
         let center = if tab_count > 1 {
