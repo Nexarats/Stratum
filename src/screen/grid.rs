@@ -122,6 +122,11 @@ impl ScreenGrid {
         self.height
     }
 
+    /// Get current scrollback history length.
+    pub fn scrollback_len(&self) -> usize {
+        self.scrollback.len()
+    }
+
     /// Get a cell at the given position.
     pub fn get_cell(&self, col: usize, row: usize) -> &Cell {
         static DEFAULT_CELL: Cell = Cell {
@@ -137,6 +142,38 @@ impl ScreenGrid {
         };
         let idx = row * self.width + col;
         self.cells.get(idx).unwrap_or(&DEFAULT_CELL)
+    }
+
+    /// Get a cell at the given position, taking scrollback history into account.
+    pub fn get_cell_scrolled(&self, col: usize, row: usize, scroll_offset: usize) -> &Cell {
+        let scrollback_len = self.scrollback.len();
+        let scroll_offset = scroll_offset.min(scrollback_len);
+        if scroll_offset == 0 {
+            return self.get_cell(col, row);
+        }
+
+        let line_idx = row + scrollback_len - scroll_offset;
+        if line_idx < scrollback_len {
+            if let Some(line) = self.scrollback.get(line_idx) {
+                static DEFAULT_CELL: Cell = Cell {
+                    ch: ' ',
+                    fg: Color::Default,
+                    bg: Color::Default,
+                    attrs: Attributes {
+                        bold: false,
+                        italic: false,
+                        underline: false,
+                        inverse: false,
+                    },
+                };
+                return line.get(col).unwrap_or(&DEFAULT_CELL);
+            }
+        } else {
+            let active_row = line_idx - scrollback_len;
+            return self.get_cell(col, active_row);
+        }
+
+        self.get_cell(col, row)
     }
 
     /// Get cursor position (col, row).

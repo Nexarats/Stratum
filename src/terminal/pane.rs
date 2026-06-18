@@ -143,25 +143,24 @@ impl TerminalPane {
             // OSC escape sequences because Windows ConPTY intercepts ESC sequences
             // internally instead of forwarding them to the terminal emulator.
             //
-            // The marker is detected and stripped from PTY output before rendering.
-            let hook = format!(
-                "{}\r",
-                concat!(
-                    "$ExecutionContext.InvokeCommand.CommandNotFoundAction = {",
-                        "param($Name,$Event) ",
-                        "if($Name -like '/*'){",
-                            "$cmd=$Name.Substring(1); ",
-                            "$Event.StopSearch=$true; ",
-                            "$Event.CommandScriptBlock=[scriptblock]::Create(",
-                                "'$a=if($args){\" \"+($args-join\" \")}else{\"\"}; ",
-                                "Write-Host \"__STRATUM_CMD__:'+$cmd+'$a\" '",
-                            ")",
-                        "}",
-                    "}",
-                )
+            //
+            // The PowerShell to generate (one-liner):
+            //   $ExecutionContext.InvokeCommand.CommandNotFoundAction = {param($Name,$Event) if($Name -like '/*'){$c=$Name.Substring(1);$Event.StopSearch=$true;$Event.CommandScriptBlock=[scriptblock]::Create("`$a=if(`$args){' '+(`$args-join' ')}else{''};Write-Host __STRATUM_CMD__:$c`$a")}}
+            let hook_cmd = concat!(
+                "$ExecutionContext.InvokeCommand.CommandNotFoundAction = {",
+                "param($Name,$Event) ",
+                "if($Name -like '/*'){",
+                "$c=$Name.Substring(1);",
+                "$Event.StopSearch=$true;",
+                "$Event.CommandScriptBlock=[scriptblock]::Create(",
+                "\"`$a=if(`$args){' '+(`$args-join' ')}else{''};",
+                "Write-Host __STRATUM_CMD__:$c`$a\"",
+                ")}}"
             );
+            let mut hook_bytes = hook_cmd.as_bytes().to_vec();
+            hook_bytes.push(b'\r');
             tracing::info!("Injecting PowerShell shell hook");
-            let _ = self.write(hook.as_bytes());
+            let _ = self.write(&hook_bytes);
             // Clear the screen so the hook command isn't visible
             let _ = self.write(b"cls\r");
         } else if shell.contains("bash") || shell.contains("zsh") || shell.contains("sh") {

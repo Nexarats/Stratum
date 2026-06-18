@@ -22,6 +22,8 @@ pub enum OverlayElement {
     StructuredTable(StructuredTableContent),
     /// Universal command suggestion card popup.
     SuggestionCard(SuggestionCardContent),
+    /// AI Agent response panel with proposed commands.
+    AiAgent(AiAgentContent),
 }
 
 /// A structured table for GPU rendering (from NOS Shell IPC).
@@ -463,6 +465,33 @@ pub enum OverlayPosition {
     Center,
 }
 
+/// AI Agent response overlay content.
+#[derive(Debug, Clone)]
+pub struct AiAgentContent {
+    /// The AI's explanation/plan.
+    pub explanation: String,
+    /// Proposed commands with descriptions.
+    pub commands: Vec<AiAgentCommandItem>,
+    /// Index of the currently highlighted command.
+    pub selected_index: usize,
+    /// Whether we're waiting for user confirmation.
+    pub awaiting_confirmation: bool,
+    /// Whether the agent is currently processing.
+    pub is_processing: bool,
+}
+
+/// A single command item in the AI agent response.
+#[derive(Debug, Clone)]
+pub struct AiAgentCommandItem {
+    pub command: String,
+    pub description: String,
+    /// Whether this command is dangerous.
+    pub is_dangerous: bool,
+    pub danger_reason: String,
+    /// Whether this command has been executed.
+    pub executed: bool,
+}
+
 /// Suggestion card overlay content.
 #[derive(Debug, Clone)]
 pub struct SuggestionCardContent {
@@ -598,6 +627,33 @@ impl OverlayManager {
     /// Hide suggestion card.
     pub fn hide_suggestion_card(&mut self) {
         self.elements.retain(|e| !matches!(e, OverlayElement::SuggestionCard(_)));
+    }
+
+    /// Show AI agent response panel.
+    pub fn show_ai_agent(&mut self, content: AiAgentContent) {
+        self.elements.retain(|e| !matches!(e, OverlayElement::AiAgent(_)));
+        self.elements.push(OverlayElement::AiAgent(content));
+    }
+
+    /// Hide AI agent response panel.
+    pub fn hide_ai_agent(&mut self) {
+        self.elements.retain(|e| !matches!(e, OverlayElement::AiAgent(_)));
+    }
+
+    /// Check if AI agent panel is visible.
+    pub fn has_ai_agent(&self) -> bool {
+        self.elements.iter().any(|e| matches!(e, OverlayElement::AiAgent(_)))
+    }
+
+    /// Get a mutable reference to the AI agent content if present.
+    pub fn ai_agent_mut(&mut self) -> Option<&mut AiAgentContent> {
+        self.elements.iter_mut().find_map(|e| {
+            if let OverlayElement::AiAgent(ref mut c) = e {
+                Some(c)
+            } else {
+                None
+            }
+        })
     }
 }
 

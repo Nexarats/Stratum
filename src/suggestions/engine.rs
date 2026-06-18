@@ -39,16 +39,16 @@ impl SuggestionEngine {
     ///
     /// Called from the event loop whenever the input tracker reports dirty.
     pub fn update(&mut self, input: &str, doc_overlay: &DocOverlay) {
-        let input = input.trim();
+        let input_trimmed = input.trim();
 
         // Empty input → hide
-        if input.is_empty() || input.len() < self.min_chars {
+        if input_trimmed.is_empty() || input_trimmed.len() < self.min_chars {
             self.card.hide();
             return;
         }
 
         // Parse input into command + args + partial
-        let parts: Vec<&str> = input.split_whitespace().collect();
+        let parts: Vec<&str> = input_trimmed.split_whitespace().collect();
         if parts.is_empty() {
             self.card.hide();
             return;
@@ -67,12 +67,12 @@ impl SuggestionEngine {
             ""
         };
 
-        let is_typing_command = parts.len() == 1 && !input.ends_with(' ');
+        let is_typing_command = parts.len() == 1 && !input.ends_with(' ') && command != "cd";
 
         let mut items = Vec::new();
 
         // ─── Layer 1: Static (inline docs flags) ───
-        if let Some(overlay) = doc_overlay.get_overlay(input) {
+        if let Some(overlay) = doc_overlay.get_overlay(input_trimmed) {
             // Add flags from inline docs
             for flag in &overlay.relevant_flags {
                 let flag_text = flag.long.clone()

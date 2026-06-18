@@ -18,6 +18,7 @@ use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use crate::ai::commands::{AiCommand, AiCommandExecutor};
+use crate::ai::natural::{NaturalLanguageAgent, NaturalLanguageResult, ProposedCommand};
 use crate::config::Settings;
 use crate::features::consequence::ConsequenceAnalyzer;
 use crate::features::dimensional_panes::OutputDetector;
@@ -27,8 +28,8 @@ use crate::input::InputTracker;
 use crate::layout::panes::{Direction, PaneId, PaneRect, PaneTree};
 use crate::layout::tabs::TabManager;
 use crate::renderer::overlay::{
-    ConsequenceWarningContent, InlineDocContent, InlineDocFlag,
-    MutationChangeLine, MutationPreviewContent, OverlayManager,
+    AiAgentCommandItem, AiAgentContent, ConsequenceWarningContent, InlineDocContent,
+    InlineDocFlag, MutationChangeLine, MutationPreviewContent, OverlayManager,
     OverlayPosition, StatusBarContent, ToastContent,
 };
 use crate::renderer::GpuRenderer;
@@ -74,6 +75,15 @@ struct AppState {
     ai_response_rx: std::sync::mpsc::Receiver<AiResponseMsg>,
     /// Sender cloned into spawned AI tasks.
     ai_response_tx: std::sync::mpsc::Sender<AiResponseMsg>,
+
+    // --- Natural Language Agent ---
+    natural_agent: NaturalLanguageAgent,
+    /// Pending natural language result awaiting user confirmation.
+    natural_result: Option<NaturalLanguageResult>,
+    /// Index of the command currently being proposed for confirmation.
+    natural_command_index: usize,
+    /// The natural language input currently being processed.
+    natural_input: Option<String>,
 
     // --- State ---
     last_frame: Instant,
@@ -236,6 +246,10 @@ impl ApplicationHandler for TerminalApp {
             ai_executor: AiCommandExecutor::new(),
             ai_response_rx: ai_rx,
             ai_response_tx: ai_tx,
+            natural_agent: NaturalLanguageAgent::new(),
+            natural_result: None,
+            natural_command_index: 0,
+            natural_input: None,
             last_frame: Instant::now(),
             needs_redraw: true,
             font_size,
@@ -374,13 +388,45 @@ impl ApplicationHandler for TerminalApp {
         while let Ok(msg) = state.ai_response_rx.try_recv() {
             match msg {
                 AiResponseMsg::Success(text) => {
-                    state.overlay_manager.toast(ToastContent::info(text));
+                    // Check if this is a natural language result (JSON with commands)
+                    if text.contains(r#""type":"natural_result""#) {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+                            let explanation = parsed["explanation"].as_str().unwrap_or("").to_string();
+                            let commands: Vec<ProposedCommand> = parsed["commands"]
+                                .as_array()
+                                .map(|arr| {
+                                    arr.iter().filter_map(|c| {
+                                        Some(ProposedCommand {
+                                            command: c["command"].as_str()?.to_string(),
+                                            description: c["description"].as_str()?.to_string(),
+                                        })
+                                    }).collect()
+                                })
+                                .unwrap_or_default();
+
+                            if !commands.is_empty() {
+                                // Show explanation as a toast
+                                state.overlay_manager.toast(ToastContent::info(explanation.clone()));
+                                // Store result for step-by-step confirmation
+                                state.natural_result = Some(NaturalLanguageResult {
+                                    explanation,
+                                    proposed_commands: commands.clone(),
+                                });
+                                state.natural_command_index = 0;
+                                // Show first command for confirmation
+                                state.prompt_ai_command();
+                            } else {
+                                // No commands — just show explanation
+                                state.overlay_manager.toast(ToastContent::info(explanation));
+                            }
+                        }
+                    } else {
+                        state.overlay_manager.toast(ToastContent::info(text));
+                    }
                     state.needs_redraw = true;
                 }
                 AiResponseMsg::Error(err) => {
-                    state.overlay_manager.toast(ToastContent::warning(
-                        format!("AI Error: {}", err),
-                    ));
+                    state.overlay_manager.toast(ToastContent::warning(err));
                     state.needs_redraw = true;
                 }
             }
@@ -548,30 +594,49 @@ impl AppState {
         let ctrl = modifiers.control_key();
         let shift = modifiers.shift_key();
 
-        // --- Handle consequence warning modal ---
+        // --- Handle consequence warning modal (also used by AI Agent) ---
         if self.overlay_manager.has_modal() {
             match &event.logical_key {
                 // Enter = confirm execution
                 Key::Named(NamedKey::Enter) => {
                     if let Some(cmd) = self.pending_command.take() {
                         self.overlay_manager.dismiss_consequence();
-                        self.overlay_manager.toast(ToastContent::warning(
-                            format!("Executing: {}", cmd),
-                        ));
-                        // The key was already sent to PTY before the modal appeared
+                        // Check if this is an AI agent command
+                        if self.natural_result.is_some() {
+                            self.execute_ai_command(cmd);
+                        } else {
+                            self.overlay_manager.toast(ToastContent::warning(
+                                format!("Executing: {}", cmd),
+                            ));
+                        }
                         self.needs_redraw = true;
                     }
                     return;
                 }
-                // Escape = cancel
+                // Escape = cancel / skip
                 Key::Named(NamedKey::Escape) => {
                     self.pending_command = None;
                     self.overlay_manager.dismiss_consequence();
-                    self.overlay_manager.toast(ToastContent::info("Command cancelled"));
+                    if self.natural_result.is_some() {
+                        // Skip this command, move to next
+                        self.advance_ai_agent();
+                    } else {
+                        self.overlay_manager.toast(ToastContent::info("Command cancelled"));
+                    }
                     self.needs_redraw = true;
                     return;
                 }
-                _ => return, // Block all other input during modal
+                // Tab = execute all remaining AI commands
+                Key::Named(NamedKey::Tab) => {
+                    if self.natural_result.is_some() {
+                        self.pending_command = None;
+                        self.overlay_manager.dismiss_consequence();
+                        self.execute_all_ai_commands();
+                        self.needs_redraw = true;
+                        return;
+                    }
+                }
+                _ => return,
             }
         }
 
@@ -710,6 +775,18 @@ impl AppState {
             return;
         }
 
+        // Reset scrollback viewport to bottom on typing
+        self.scroll_offset = 0;
+
+        // --- Natural Language Interception ---
+        // If Enter is pressed, check if the current input is natural language.
+        // If so, intercept it: clear the shell line, don't send Enter, route to AI.
+        let is_enter = bytes == b"\r" || bytes == b"\n";
+        let current_input = self.input_tracker.current_input().to_string();
+        let intercept_natural = is_enter
+            && !current_input.is_empty()
+            && crate::ai::natural::is_natural_language(&current_input);
+
         // --- Feed input tracker (for inline docs + suggestions) ---
         let _submitted_command = self.input_tracker.feed(&bytes);
 
@@ -718,9 +795,36 @@ impl AppState {
             self.update_suggestions();
         }
 
+        // --- Intercept slash commands and natural language BEFORE sending to PTY ---
+        if intercept_natural {
+            // Clear the shell line with Ctrl+U (0x15)
+            let active_pane_id = self.pane_tree.active_pane();
+            if let Some(pane) = self.panes.get_mut(&active_pane_id) {
+                let _ = pane.write(b"\x15"); // Ctrl+U clears the current line
+            }
+            // Dispatch to AI agent
+            self.dispatch_natural_language(current_input);
+            self.needs_redraw = true;
+            return;
+        }
+
+        // --- Intercept /slash commands (handle inline instead of shell hook) ---
+        if let Some(cmd) = _submitted_command {
+            if cmd.starts_with('/') {
+                let is_ai = self.on_command_submitted(cmd.clone());
+                if is_ai {
+                    // Clear the shell line so the /command doesn't get executed
+                    let active_pane_id = self.pane_tree.active_pane();
+                    if let Some(pane) = self.panes.get_mut(&active_pane_id) {
+                        let _ = pane.write(b"\x15"); // Ctrl+U = clear line
+                    }
+                    self.needs_redraw = true;
+                    return;
+                }
+            }
+        }
+
         // --- Send directly to PTY ---
-        // Slash commands are handled at the SHELL level via CommandNotFoundAction hook.
-        // The shell catches /commands and sends OSC sequences back to us.
         let active_pane_id = self.pane_tree.active_pane();
         if let Some(pane) = self.panes.get_mut(&active_pane_id) {
             if !pane.exited {
@@ -869,6 +973,32 @@ impl AppState {
                 AiCommand::ClearChat => {
                     self.ai_executor.chat_engine.clear();
                     self.overlay_manager.toast(ToastContent::info("Chat history cleared"));
+                    self.needs_redraw = true;
+                    return true;
+                }
+                AiCommand::SetProvider(ref name) => {
+                    let name = name.clone();
+                    if self.ai_executor.registry.get(&name).is_some() {
+                        self.ai_executor.credentials.active_provider = Some(name.clone());
+                        let _ = self.ai_executor.credentials.save();
+                        self.overlay_manager.toast(ToastContent::info(
+                            format!("✓ Active provider → {}", name)
+                        ));
+                    } else {
+                        self.overlay_manager.toast(ToastContent::warning(
+                            format!("✗ Unknown provider: '{}'", name)
+                        ));
+                    }
+                    self.needs_redraw = true;
+                    return true;
+                }
+                AiCommand::SetModel(ref model) => {
+                    let model = model.clone();
+                    self.ai_executor.credentials.active_model = Some(model.clone());
+                    let _ = self.ai_executor.credentials.save();
+                    self.overlay_manager.toast(ToastContent::info(
+                        format!("✓ Active model → {}", model)
+                    ));
                     self.needs_redraw = true;
                     return true;
                 }
@@ -1090,6 +1220,214 @@ impl AppState {
         });
     }
 
+    /// Dispatch a natural language request to the AI agent.
+    fn dispatch_natural_language(&mut self, input: String) {
+        use crate::ai::chat::ChatEngine;
+
+        self.natural_input = Some(input.clone());
+
+        // Show processing indicator as toast (AiAgent overlay isn't GPU-rendered yet)
+        self.overlay_manager.toast(ToastContent::info("⏳ AI Agent thinking..."));
+
+        // Get the active provider
+        let provider = match self.ai_executor.credentials.active_provider.clone() {
+            Some(name) => {
+                match self.ai_executor.registry.get(&name) {
+                    Some(p) if p.is_configured() => p.clone(),
+                    _ => {
+                        match self.ai_executor.registry.first_configured() {
+                            Some(p) => p.clone(),
+                            None => {
+                                self.overlay_manager.hide_ai_agent();
+                                self.overlay_manager.toast(ToastContent::warning(
+                                    "No AI provider configured. Use /ai-set-key <provider> <key>"
+                                ));
+                                self.needs_redraw = true;
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            None => {
+                match self.ai_executor.registry.first_configured() {
+                    Some(p) => p.clone(),
+                    None => {
+                        self.overlay_manager.hide_ai_agent();
+                        self.overlay_manager.toast(ToastContent::warning(
+                            "No AI provider configured. Use /ai-set-key <provider> <key>"
+                        ));
+                        self.needs_redraw = true;
+                        return;
+                    }
+                }
+            }
+        };
+
+        let cwd = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "unknown".into());
+
+        // Clone what we need for the background thread
+        let tx = self.ai_response_tx.clone();
+
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = tx.send(AiResponseMsg::Error(format!("AI runtime error: {}", e)));
+                    return;
+                }
+            };
+
+            rt.block_on(async {
+                let mut agent = NaturalLanguageAgent::new();
+                match agent.process(&input, &cwd, &provider, false).await {
+                    Ok(result) => {
+                        if result.proposed_commands.is_empty() {
+                            // No commands to execute — show explanation
+                            let _ = tx.send(AiResponseMsg::Success(result.explanation));
+                        } else {
+                            // Commands proposed — send as structured response
+                            let json = serde_json::json!({
+                                "type": "natural_result",
+                                "explanation": result.explanation,
+                                "commands": result.proposed_commands.iter().map(|c| {
+                                    serde_json::json!({
+                                        "command": c.command,
+                                        "description": c.description,
+                                    })
+                                }).collect::<Vec<_>>(),
+                            });
+                            let _ = tx.send(AiResponseMsg::Success(json.to_string()));
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(AiResponseMsg::Error(format!("AI error: {}", e)));
+                    }
+                }
+            });
+        });
+    }
+
+    /// Execute a single command proposed by the AI agent.
+    fn execute_ai_command(&mut self, command: String) {
+        let active_pane_id = self.pane_tree.active_pane();
+        if let Some(pane) = self.panes.get_mut(&active_pane_id) {
+            if !pane.exited {
+                let full_command = format!("{}\n", command);
+                if let Err(e) = pane.write(full_command.as_bytes()) {
+                    tracing::warn!("PTY write error: {}", e);
+                }
+                self.overlay_manager.toast(ToastContent::info(
+                    format!("▸ {}", command),
+                ));
+            }
+        }
+        // Move to next command
+        self.advance_ai_agent();
+    }
+
+    /// Move to the next proposed command or dismiss.
+    fn advance_ai_agent(&mut self) {
+        self.natural_command_index += 1;
+        self.overlay_manager.dismiss_consequence();
+        self.prompt_ai_command();
+    }
+
+    /// Execute all remaining AI-proposed commands.
+    fn execute_all_ai_commands(&mut self) {
+        if let Some(ref result) = self.natural_result.clone() {
+            let active_pane_id = self.pane_tree.active_pane();
+            // Execute all remaining commands sequentially
+            for i in self.natural_command_index..result.proposed_commands.len() {
+                let cmd = &result.proposed_commands[i];
+                if let Some(pane) = self.panes.get_mut(&active_pane_id) {
+                    if !pane.exited {
+                        let full_command = format!("{}\n", cmd.command);
+                        if let Err(e) = pane.write(full_command.as_bytes()) {
+                            tracing::warn!("PTY write error: {}", e);
+                        }
+                        self.overlay_manager.toast(ToastContent::info(
+                            format!("▸ {} — {}", cmd.command, cmd.description),
+                        ));
+                    }
+                }
+            }
+            self.finish_ai_agent();
+        }
+    }
+
+    /// Show the first/next proposed AI command for user confirmation.
+    fn prompt_ai_command(&mut self) {
+        if let Some(ref result) = self.natural_result.clone() {
+            if self.natural_command_index < result.proposed_commands.len() {
+                let cmd = &result.proposed_commands[self.natural_command_index];
+                let is_dangerous = self.natural_agent.check_dangerous(&cmd.command);
+                let remaining = result.proposed_commands.len() - self.natural_command_index;
+
+                let message = if is_dangerous {
+                    let reason = self.natural_agent.danger_reason(&cmd.command);
+                    format!(
+                        "Step {}/{} — {}\n\n⚠ {}\n\nEnter=execute  Escape=skip  Tab=all",
+                        self.natural_command_index + 1,
+                        result.proposed_commands.len(),
+                        cmd.description,
+                        reason,
+                    )
+                } else {
+                    format!(
+                        "Step {}/{} — {}\n\n${}\n\nEnter=execute  Escape=skip  Tab=all",
+                        self.natural_command_index + 1,
+                        result.proposed_commands.len(),
+                        cmd.description,
+                        cmd.command,
+                    )
+                };
+
+                self.overlay_manager.show_consequence(ConsequenceWarningContent {
+                    command: cmd.command.clone(),
+                    risk_level: if remaining > 1 {
+                        format!("Step {}/{}", self.natural_command_index + 1, result.proposed_commands.len())
+                    } else {
+                        "Final Step".to_string()
+                    },
+                    risk_color: if is_dangerous { [1.0, 0.5, 0.15, 1.0] } else { [0.3, 0.6, 1.0, 1.0] },
+                    reversibility: if is_dangerous { "⚠ DANGEROUS".to_string() } else { "Safe".to_string() },
+                    blast_radius: format!("{}/{}", self.natural_command_index + 1, result.proposed_commands.len()),
+                    message,
+                    requires_confirmation: true,
+                });
+                // Store the command so modal Enter handler can execute it
+                self.pending_command = Some(cmd.command.clone());
+            } else {
+                // All commands processed
+                self.finish_ai_agent();
+            }
+        }
+    }
+
+    /// Finish AI agent execution and show summary.
+    fn finish_ai_agent(&mut self) {
+        let count = self.natural_command_index;
+        self.dismiss_ai_agent();
+        self.overlay_manager.toast(ToastContent::info(
+            format!("✓ AI Agent — {} commands executed", count),
+        ));
+    }
+
+    /// Dismiss AI agent state.
+    fn dismiss_ai_agent(&mut self) {
+        self.overlay_manager.dismiss_consequence();
+        self.natural_result = None;
+        self.natural_command_index = 0;
+        self.natural_input = None;
+        self.needs_redraw = true;
+    }
+
     /// Update inline documentation based on current input.
     fn update_inline_docs(&mut self) {
         let input = self.input_tracker.current_input().to_string();
@@ -1251,7 +1589,7 @@ impl AppState {
         if all_pane_ids.len() <= 1 && self.tab_manager.tab_count() <= 1 {
             // Single pane, single tab — fast path
             if let Some(pane) = self.panes.get(&active_pane_id) {
-                if let Err(e) = self.renderer.render(&pane.screen, &self.selection, &self.overlay_manager.elements) {
+                if let Err(e) = self.renderer.render(&pane.screen, &self.selection, &self.overlay_manager.elements, self.scroll_offset) {
                     tracing::error!("Render error: {}", e);
                 }
             }
@@ -1277,7 +1615,7 @@ impl AppState {
                 .map(|(i, tab)| (tab.title.as_str(), i == self.tab_manager.active_index()))
                 .collect();
 
-            if let Err(e) = self.renderer.render_multi(&pane_data, &tab_titles, &self.selection, &self.overlay_manager.elements) {
+            if let Err(e) = self.renderer.render_multi(&pane_data, &tab_titles, &self.selection, &self.overlay_manager.elements, self.scroll_offset) {
                 tracing::error!("Multi-pane render error: {}", e);
             }
         }
@@ -1334,8 +1672,101 @@ impl AppState {
         )
     }
 
+    /// Handle mouse click on the suggestion card overlay.
+    /// Returns true if the click was handled/consumed by the card.
+    fn handle_mouse_click_suggestion_card(&mut self) -> bool {
+        if !self.suggestion_engine.card.visible || self.suggestion_engine.card.items.is_empty() {
+            return false;
+        }
+
+        let active_pane_id = self.pane_tree.active_pane();
+        if let Some(pane) = self.panes.get(&active_pane_id) {
+            let (cx, cy) = pane.screen.cursor_position();
+            let cell_w = self.renderer.glyph_atlas.cell_width;
+            let cell_h = self.renderer.glyph_atlas.cell_height;
+            let screen_w = self.renderer.size.width as f32;
+            let screen_h = self.renderer.size.height as f32;
+
+            let card = &self.suggestion_engine.card;
+            let max_vis = card.max_visible.min(card.items.len());
+            let row_h = cell_h + 4.0;
+            let header_h = cell_h + 6.0;
+            let footer_h = cell_h + 2.0;
+            let card_w = 420.0_f32;
+            let card_h = header_h + (max_vis as f32) * row_h + footer_h;
+
+            let (card_cx, card_cy) = (
+                (cx as f32 * cell_w).min(screen_w - card_w - 8.0).max(4.0),
+                (cy as f32 + 1.5) * cell_h,
+            );
+            let card_x = card_cx;
+            let card_y = if card_cy + card_h > screen_h - cell_h * 2.0 {
+                (card_cy - card_h - cell_h).max(4.0)
+            } else {
+                card_cy
+            };
+
+            let mx = self.mouse_pos.0 as f32;
+            let my = self.mouse_pos.1 as f32;
+
+            if mx >= card_x && mx <= card_x + card_w && my >= card_y && my <= card_y + card_h {
+                let item_area_y = card_y + header_h;
+                let item_area_h = (max_vis as f32) * row_h;
+
+                if my >= item_area_y && my <= item_area_y + item_area_h {
+                    let relative_y = my - item_area_y;
+                    let clicked_visible_idx = (relative_y / row_h).floor() as usize;
+                    if clicked_visible_idx < max_vis {
+                        let actual_idx = card.scroll_offset + clicked_visible_idx;
+                        if actual_idx < card.items.len() {
+                            let insert_text = card.items[actual_idx].insert_text.clone();
+
+                            // Calculate how much of the current partial to replace
+                            let current = self.input_tracker.current_input().to_string();
+                            let parts: Vec<&str> = current.split_whitespace().collect();
+                            let partial = if parts.len() > 1 && !current.ends_with(' ') {
+                                parts.last().copied().unwrap_or("")
+                            } else {
+                                ""
+                            };
+
+                            let mut bytes_to_send = Vec::new();
+                            for _ in 0..partial.len() {
+                                bytes_to_send.push(0x7f); // Backspace
+                            }
+                            bytes_to_send.extend_from_slice(insert_text.as_bytes());
+
+                            self.input_tracker.feed(&bytes_to_send);
+                            let active_pane_id = self.pane_tree.active_pane();
+                            if let Some(pane_mut) = self.panes.get_mut(&active_pane_id) {
+                                if !pane_mut.exited {
+                                    let _ = pane_mut.write(&bytes_to_send);
+                                }
+                            }
+
+                            self.suggestion_engine.card.hide();
+                            self.overlay_manager.hide_suggestion_card();
+
+                            if self.input_tracker.take_dirty() {
+                                self.update_inline_docs();
+                                self.update_suggestions();
+                            }
+                            self.needs_redraw = true;
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+        false
+    }
+
     /// Handle a left mouse button click — supports single, double, and triple click.
     fn handle_mouse_click(&mut self) {
+        if self.handle_mouse_click_suggestion_card() {
+            return;
+        }
+
         let now = Instant::now();
         let pos = self.pixel_to_grid(self.mouse_pos.0, self.mouse_pos.1);
 
@@ -1347,9 +1778,6 @@ impl AppState {
             self.click_count = 1;
         }
         self.last_click_time = now;
-
-        // Clear any scrollback view on click
-        self.scroll_offset = 0;
 
         match self.click_count {
             1 => {
@@ -1397,7 +1825,7 @@ impl AppState {
             let width = pane.screen.width();
             let height = pane.screen.height();
             self.selection.extract_text(width, height, |col, row| {
-                pane.screen.get_cell(col, row).ch
+                pane.screen.get_cell_scrolled(col, row, self.scroll_offset).ch
             })
         } else {
             String::new()

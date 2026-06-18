@@ -11,7 +11,7 @@
 
 ---
 
-Stratum is a **GPU-rendered, AI-aware, and agent-compatible terminal emulator** built from scratch in Rust. It does not just display text — it understands your commands, previews their side effects, hosts autonomous agents, and presents output as structured, interactive data.
+Stratum is a **GPU-rendered, AI-aware, and agent-compatible terminal emulator** built from scratch in Rust. It does not just display text — it understands your commands, previews their side effects, hosts autonomous agents, and presents output as structured, interactive data. In addition, Stratum provides an **interactive CLI pair-programming agent (`stratum --talk`)** that functions as a CPU-fallback shell, working on any standard console (PowerShell, CMD, bash, etc.).
 
 ---
 
@@ -22,6 +22,7 @@ Traditional terminal emulators (like Alacritty, WezTerm, iTerm2, or Windows Term
 | Feature | Traditional Terminals | ⚡ Stratum Terminal |
 | :--- | :--- | :--- |
 | **Agent Integration** | None. Agents must scrape terminal buffers or run blind. | **Stratum Agent Protocol (SAP)** hosts agents directly with interactive IPC control. |
+| **Interactive AI Partner** | Requires opening browser or separate sidebar chats. | **Talk Mode (`stratum --talk`)** runs an interactive AI partner inline inside the terminal. |
 | **Safety Guardrails** | Runs any command blindly, even destructive ones. | **Execution Consequence Scoring** analyzes risk and intercepts hazardous commands. |
 | **Data Rendering** | Unstructured flat text streams. | **Dimensional Output Panes** render escape-sequence tables, JSON, and keys. |
 | **Filesystem Awareness** | No awareness of side-effects until after they run. | **Live Mutation Preview** lists changes before executing commands. |
@@ -78,6 +79,17 @@ Built on top of `wgpu`, Stratum renders the character grid and overlays with cus
 *   Paced 120 FPS rendering.
 *   An incredibly small release memory footprint (~7 MB binary).
 
+### 🧠 7. Talk Mode (Interactive Terminal AI Agent)
+By running `stratum --talk`, you enter an interactive console session hosted entirely via crossterm's CPU renderer. This fallback makes the AI terminal agent accessible inside any system shell (CMD, PowerShell, git bash, etc.) without requiring a graphics driver or GPU.
+
+Features:
+*   **Toggle Modes via `Tab`**: Switch instantly between `[shell]` mode (where commands execute directly on your local system) and `[ai]` mode (where you converse in natural language with the agent).
+*   **Intelligent Autocomplete Card**: A visual drop-down overlay shows auto-completions, command guidelines, and directory folder lists. Use mouse click or navigate via `Up`/`Down` arrows and press `Enter` or `Tab` to select.
+*   **Web Search & Page Browsing**: Integrated search tools (`websearch "<query>"` and `webread "<url>"`) allow the agent to query DuckDuckGo and scrape text contents (removing CSS/JS script blocks) to retrieve facts, documentation, or debug steps.
+*   **Dynamic Skill & Package Installation**: The agent can detect if required utilities (like `ripgrep`, `docx`, `pdfkit`, or `mermaid-cli`) are missing, automatically propose and install them via npm or cargo, write JS/Node scripts, and execute them to compile styled reports or diagrams.
+*   **Responsive Execution Cancellation**: Press `Esc` or `Ctrl+C` at any point—whether during execution of long-running command pipelines or during the agent's thinking phase—to instantly abort processes safely, restore raw modes, and return to the prompt.
+*   **ASCII Tabular Output**: Displays structured JSON, databases, and space-aligned columns in beautifully formatted bold ASCII tables.
+
 ---
 
 ## 🪟 Layout and Pane Management
@@ -100,8 +112,11 @@ Stratum organizes terminal sessions into tabs and binary-tree split panes.
 ## ⚙️ Usage & Commands
 
 ```bash
-# Start Stratum with the default NOS Shell
+# Start Stratum with the default NOS Shell (requires GPU support)
 stratum
+
+# Start the interactive inline AI pair-programming partner (CPU fallback, runs in any terminal)
+stratum --talk
 
 # Start Stratum in agent-control mode
 stratum --agent-mode

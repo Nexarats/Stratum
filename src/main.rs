@@ -24,6 +24,7 @@ mod parser;
 mod renderer;
 mod screen;
 mod suggestions;
+mod talk;
 mod terminal;
 
 use anyhow::Result;
@@ -57,6 +58,14 @@ struct Cli {
     /// Font size in points
     #[arg(long, default_value = "14.0")]
     font_size: Option<f32>,
+
+    /// Talk mode — AI agent in your current terminal (no GPU needed)
+    #[arg(long)]
+    talk: bool,
+
+    /// Run in GUI mode (GPU-rendered window terminal)
+    #[arg(long)]
+    gui: bool,
 }
 
 fn main() -> Result<()> {
@@ -79,6 +88,11 @@ fn main() -> Result<()> {
         "Stratum v{} — The terminal that understands what you're doing",
         env!("CARGO_PKG_VERSION")
     );
+
+    // By default, if not explicitly requesting GUI mode or agent mode, start talk mode directly.
+    if cli.talk || (!cli.gui && !cli.agent_mode) {
+        return talk::run_talk_mode(cli.debug);
+    }
 
     // Load configuration
     let mut settings = config::Settings::load(cli.config.as_deref())?;

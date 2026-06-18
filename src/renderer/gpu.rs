@@ -330,7 +330,7 @@ impl GpuRenderer {
     }
 
     /// Render the terminal screen grid with overlays and selection highlighting.
-    pub fn render(&mut self, screen: &ScreenGrid, selection: &Selection, overlays: &[crate::renderer::overlay::OverlayElement]) -> Result<()> {
+    pub fn render(&mut self, screen: &ScreenGrid, selection: &Selection, overlays: &[crate::renderer::overlay::OverlayElement], scroll_offset: usize) -> Result<()> {
         // Re-upload atlas if new glyphs were rasterized
         if self.glyph_atlas.dirty {
             self.queue.write_texture(
@@ -368,7 +368,7 @@ impl GpuRenderer {
 
         for row in 0..screen.height() {
             for col in 0..screen.width() {
-                let cell = screen.get_cell(col, row);
+                let cell = screen.get_cell_scrolled(col, row, scroll_offset);
 
                 // Pixel coordinates of cell
                 let px = col as f32 * cell_w;
@@ -517,9 +517,10 @@ impl GpuRenderer {
         // --- Cursor ---
         {
             let (cur_col, cur_row) = screen.cursor_position();
-            if cur_col < screen.width() && cur_row < screen.height() {
+            let viewport_row = cur_row + scroll_offset;
+            if cur_col < screen.width() && viewport_row < screen.height() {
                 let px = cur_col as f32 * cell_w;
-                let py = cur_row as f32 * cell_h;
+                let py = viewport_row as f32 * cell_h;
 
                 let x0 = (px / screen_w) * 2.0 - 1.0;
                 let y0 = 1.0 - (py / screen_h) * 2.0;
@@ -648,6 +649,7 @@ impl GpuRenderer {
         tab_titles: &[(&str, bool)], // (title, is_active)
         selection: &Selection,
         overlays: &[crate::renderer::overlay::OverlayElement],
+        scroll_offset: usize,
     ) -> Result<()> {
         // Re-upload atlas if needed
         if self.glyph_atlas.dirty {
@@ -758,10 +760,13 @@ impl GpuRenderer {
             let pane_y = rect.y + content_y_offset;
             let pane_w = rect.width;
             let pane_h = rect.height - content_y_offset / panes.len().max(1) as f32;
-
             for row in 0..screen.height() {
                 for col in 0..screen.width() {
-                    let cell = screen.get_cell(col, row);
+                    let cell = if *is_active {
+                        screen.get_cell_scrolled(col, row, scroll_offset)
+                    } else {
+                        screen.get_cell(col, row)
+                    };
 
                     let px = pane_x + col as f32 * cell_w;
                     let py = pane_y + row as f32 * cell_h;
@@ -838,9 +843,10 @@ impl GpuRenderer {
             // --- Cursor (only for active pane) ---
             if *is_active {
                 let (cur_col, cur_row) = screen.cursor_position();
-                if cur_col < screen.width() && cur_row < screen.height() {
+                let viewport_row = cur_row + scroll_offset;
+                if cur_col < screen.width() && viewport_row < screen.height() {
                     let cpx = pane_x + cur_col as f32 * cell_w;
-                    let cpy = pane_y + cur_row as f32 * cell_h;
+                    let cpy = pane_y + viewport_row as f32 * cell_h;
 
                     if cpx + cell_w <= pane_x + pane_w && cpy + cell_h <= pane_y + pane_h {
                         let cx0 = (cpx / screen_w) * 2.0 - 1.0;

@@ -26,12 +26,18 @@ pub enum AiCommand {
     Providers,
     /// `/ai-set-key <provider> <key>` — set an API key.
     SetKey { provider: String, key: String },
+    /// `/ai-set-provider <name>` — switch active provider.
+    SetProvider(String),
+    /// `/ai-set-model <model>` — switch active model.
+    SetModel(String),
     /// `/ai-models <provider>` — list models for a provider.
     Models(String),
     /// `/ai-test` — test the current AI connection.
     Test,
     /// `/clear-chat` — clear AI conversation history.
     ClearChat,
+    /// `/shelp` — show the Stratum help guide.
+    Shelp,
 }
 
 impl AiCommand {
@@ -39,14 +45,31 @@ impl AiCommand {
     /// Returns None if it's not an AI command (pass to shell).
     pub fn parse(input: &str) -> Option<Self> {
         let trimmed = input.trim();
-        if !trimmed.starts_with('/') {
+        if trimmed.is_empty() {
             return None;
         }
 
-        let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
+        let normalized = if trimmed.starts_with('/') {
+            trimmed.to_string()
+        } else {
+            let first_word = trimmed.split_whitespace().next().unwrap_or("");
+            let commands = [
+                "ask", "explain", "suggest", "translate", "ai-config", "ai", 
+                "ai-providers", "ai-set-key", "ai-models", "ai-set-provider", 
+                "ai-set-model", "ai-test", "clear-chat", "shelp"
+            ];
+            if commands.contains(&first_word) {
+                format!("/{}", trimmed)
+            } else {
+                return None;
+            }
+        };
+
+        let parts: Vec<&str> = normalized.splitn(3, ' ').collect();
         let cmd = parts[0].to_lowercase();
 
         match cmd.as_str() {
+            "/shelp" => Some(Self::Shelp),
             "/ask" => {
                 let query = parts.get(1..).map(|p| p.join(" ")).unwrap_or_default();
                 if query.is_empty() {
@@ -87,6 +110,20 @@ impl AiCommand {
             "/ai-models" => {
                 if parts.len() >= 2 {
                     Some(Self::Models(parts[1].to_string()))
+                } else {
+                    None
+                }
+            }
+            "/ai-set-provider" => {
+                if parts.len() >= 2 {
+                    Some(Self::SetProvider(parts[1].to_string()))
+                } else {
+                    None
+                }
+            }
+            "/ai-set-model" => {
+                if parts.len() >= 2 {
+                    Some(Self::SetModel(parts[1].to_string()))
                 } else {
                     None
                 }
@@ -133,13 +170,50 @@ impl AiCommandExecutor {
             AiCommand::Config => Ok(self.handle_config()),
             AiCommand::Providers => Ok(self.handle_providers()),
             AiCommand::SetKey { provider, key } => self.handle_set_key(provider, key),
+            AiCommand::SetProvider(name) => self.handle_set_provider(name),
+            AiCommand::SetModel(model) => self.handle_set_model(model),
             AiCommand::Models(provider) => Ok(self.handle_models(provider)),
             AiCommand::Test => self.handle_test().await,
             AiCommand::ClearChat => {
                 self.chat_engine.clear();
                 Ok("Chat history cleared.".into())
             }
+            AiCommand::Shelp => Ok(self.handle_shelp()),
         }
+    }
+
+    /// shelp — show Stratum Shell AI Command Guide.
+    fn handle_shelp(&self) -> String {
+        let mut out = String::new();
+        out.push_str("╭─ Stratum Shell AI — Command Guide ──────────────────────────────────────╮\n");
+        out.push_str("│                                                                         │\n");
+        out.push_str("│   To interact with the AI or the Shell, you have two modes (toggle with │\n");
+        out.push_str("│   the [Tab] key):                                                       │\n");
+        out.push_str("│                                                                         │\n");
+        out.push_str("│     [shell] Mode: Commands run on the host PTY (PowerShell/bash) directly.│\n");
+        out.push_str("│     [ai] Mode:    Input is processed by the AI agent in natural language. │\n");
+        out.push_str("│                                                                         │\n");
+        out.push_str("│   Available Commands (can be run in both modes, with or without '/'):    │\n");
+        out.push_str("│                                                                         │\n");
+        out.push_str("│     shelp                     - Show this interactive help guide        │\n");
+        out.push_str("│     ask <question>            - Ask the AI a question directly          │\n");
+        out.push_str("│     explain <output/error>    - Explain a terminal output or error      │\n");
+        out.push_str("│     suggest                   - Suggest commands in the current directory│\n");
+        out.push_str("│     translate <command>       - Translate commands between OS platforms │\n");
+        out.push_str("│     clear-chat                - Clear current conversation history      │\n");
+        out.push_str("│                                                                         │\n");
+        out.push_str("│   AI Configuration Commands:                                             │\n");
+        out.push_str("│                                                                         │\n");
+        out.push_str("│     ai-config (or 'ai')       - View currently active provider & status │\n");
+        out.push_str("│     ai-providers              - List all 29 supported AI providers      │\n");
+        out.push_str("│     ai-set-key <prov> <key>   - Save API key for a provider             │\n");
+        out.push_str("│     ai-models <prov>          - List available models for a provider    │\n");
+        out.push_str("│     ai-set-provider <name>    - Change the active provider              │\n");
+        out.push_str("│     ai-set-model <model>      - Change the active model                 │\n");
+        out.push_str("│     ai-test                   - Test connection to the active provider  │\n");
+        out.push_str("│                                                                         │\n");
+        out.push_str("╰─────────────────────────────────────────────────────────────────────────╯\n");
+        out
     }
 
     /// /ask — send a question to the AI.
@@ -275,6 +349,37 @@ impl AiCommandExecutor {
         Ok(format!("✓ API key set for '{}' and saved to credentials.", provider))
     }
 
+    /// /ai-set-provider — switch active provider.
+    fn handle_set_provider(&mut self, name: &str) -> Result<String> {
+        // Verify the provider exists
+        let provider = self.registry.get(name)
+            .ok_or_else(|| anyhow::anyhow!("Unknown provider: '{}'. Use /ai-providers to see available providers.", name))?;
+        
+        self.credentials.active_provider = Some(name.to_string());
+        self.credentials.active_model = Some(provider.config.default_model.clone());
+        let _ = self.credentials.save();
+        Ok(format!("✓ Active provider set to '{}' (default model: {})", name, provider.config.default_model))
+    }
+
+    /// /ai-set-model — switch active model.
+    fn handle_set_model(&mut self, model: &str) -> Result<String> {
+        if let Some(ref provider_name) = self.credentials.active_provider {
+            if let Some(provider) = self.registry.get(provider_name) {
+                if !provider.config.models.contains(&model.to_string()) && model != provider.config.default_model {
+                    anyhow::bail!(
+                        "Model '{}' is not supported by active provider '{}'. Supported models: {:?}",
+                        model,
+                        provider.config.display_name,
+                        provider.config.models
+                    );
+                }
+            }
+        }
+        self.credentials.active_model = Some(model.to_string());
+        let _ = self.credentials.save();
+        Ok(format!("✓ Active model set to '{}'", model))
+    }
+
     /// /ai-models — list models for a provider.
     fn handle_models(&self, provider: &str) -> String {
         match self.registry.get(provider) {
@@ -309,20 +414,33 @@ impl AiCommandExecutor {
     }
 
     /// Get the currently active provider.
-    fn get_active_provider(&self) -> Result<AiProvider> {
+    pub fn get_active_provider(&self) -> Result<AiProvider> {
         // Check if user has set a specific provider
         if let Some(ref name) = self.credentials.active_provider {
             if let Some(p) = self.registry.get(name) {
                 if p.is_configured() {
-                    return Ok(p.clone());
+                    let mut provider = p.clone();
+                    if let Some(ref model) = self.credentials.active_model {
+                        if provider.config.models.contains(model) || model == &provider.config.default_model {
+                            provider.active_model = model.clone();
+                        }
+                    }
+                    return Ok(provider);
                 }
             }
         }
 
         // Auto-detect first configured provider
-        self.registry.first_configured()
+        let mut provider = self.registry.first_configured()
             .cloned()
-            .context("No AI provider configured. Use /ai-set-key <provider> <key> to set up.")
+            .context("No AI provider configured. Use /ai-set-key <provider> <key> to set up.")?;
+
+        if let Some(ref model) = self.credentials.active_model {
+            if provider.config.models.contains(model) || model == &provider.config.default_model {
+                provider.active_model = model.clone();
+            }
+        }
+        Ok(provider)
     }
 
     /// Format an AI response for terminal display.
@@ -356,6 +474,28 @@ mod tests {
         if let Some(AiCommand::Ask(q)) = cmd {
             assert_eq!(q, "how do I list files?");
         }
+    }
+
+    #[test]
+    fn test_parse_slash_free_commands() {
+        let cmd = AiCommand::parse("ask how do I list files?");
+        assert!(matches!(cmd, Some(AiCommand::Ask(_))));
+        if let Some(AiCommand::Ask(q)) = cmd {
+            assert_eq!(q, "how do I list files?");
+        }
+
+        let cmd = AiCommand::parse("explain permission denied");
+        assert!(matches!(cmd, Some(AiCommand::Explain(Some(_)))));
+        if let Some(AiCommand::Explain(Some(ctx))) = cmd {
+            assert_eq!(ctx, "permission denied");
+        }
+
+        assert!(matches!(AiCommand::parse("suggest"), Some(AiCommand::Suggest)));
+        assert!(matches!(AiCommand::parse("shelp"), Some(AiCommand::Shelp)));
+        assert!(matches!(AiCommand::parse("ai-config"), Some(AiCommand::Config)));
+        assert!(matches!(AiCommand::parse("ai"), Some(AiCommand::Config)));
+        assert!(matches!(AiCommand::parse("ai-providers"), Some(AiCommand::Providers)));
+        assert!(matches!(AiCommand::parse("clear-chat"), Some(AiCommand::ClearChat)));
     }
 
     #[test]

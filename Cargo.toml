@@ -39,7 +39,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6.0"
 
 # HTTP client for AI API calls
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "gzip", "brotli", "deflate"], default-features = false }
 
 # CLI argument parsing
 clap = { version = "4", features = ["derive"] }

@@ -8,8 +8,11 @@ pub mod registry;
 pub mod chat;
 pub mod credentials;
 pub mod commands;
+pub mod natural;
+pub mod memory;
 
 pub use provider::{AiProvider, AiProviderConfig, AiMessage, AiRole, AiResponse};
 pub use registry::ProviderRegistry;
 pub use chat::ChatEngine;
 pub use credentials::CredentialStore;
+pub use memory::LongTermMemory;
